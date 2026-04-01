@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CCASS Whale Tracker | GEC Analytics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.0/papaparse.min.js"></script>
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --accent: #3b82f6; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: auto; }
+        .header { background: var(--card); padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .search-box { display: flex; gap: 10px; margin-top: 15px; }
+        input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; }
+        button { padding: 12px 24px; border-radius: 8px; background: var(--accent); color: white; border: none; cursor: pointer; font-weight: 600; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 20px; font-size: 0.9rem; }
+        .stat-item { background: #334155; padding: 10px; border-radius: 6px; }
+        #chart-container { background: var(--card); padding: 20px; border-radius: 12px; height: 600px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>CCASS Institutional Ownership</h1>
+        <p>Visualizing "Whales" (Strategic) vs. "Float" (Retail Brokers)</p>
+        <div class="search-box">
+            <input type="text" id="tickerInput" placeholder="Enter Ticker (e.g., 2497) or Name...">
+            <button onclick="searchStock()">Analyze</button>
+        </div>
+        <div id="metaInfo" class="stats" style="display: none;">
+            <div class="stat-item">Name: <span id="sName">-</span></div>
+            <div class="stat-item">Total Issued: <span id="sTotal">-</span></div>
+            <div class="stat-item">CCASS Concentration: <span id="sConc">-</span></div>
+        </div>
+    </div>
+
+    <div id="chart-container">
+        <canvas id="ownershipChart"></canvas>
+    </div>
+</div>
+
+<script>
+    let stocksIndex = {};
+    let participants = {};
+    let chart = null;
+
+    // 1. Initial Load of Metadata
+    Promise.all([
+        fetch('stocks_index.json').then(r => r.json()),
+        fetch('participants.json').then(r => r.json())
+    ]).then(([s, p]) => {
+        stocksIndex = s;
+        participants = p;
+        console.log("Databases loaded.");
+    });
+
+    async function searchStock() {
+        const query = document.getElementById('tickerInput').value.trim().toLowerCase();
+        let foundId = null;
+
+        // Search by ID or Name
+        for (let id in stocksIndex) {
+            if (id === query || stocksIndex[id].name.toLowerCase().includes(query)) {
+                foundId = id;
+                break;
+            }
+        }
+
+        if (foundId) {
+            const info = stocksIndex[foundId];
+            document.getElementById('metaInfo').style.display = 'grid';
+            document.getElementById('sName').innerText = info.name;
+            document.getElementById('sTotal').innerText = info.total.toLocaleString();
+            loadData(foundId, info.total);
+        } else {
+            alert("Stock not found in your index.");
+        }
+    }
+
+    function loadData(issueId, totalShares) {
+        Papa.parse(`ccass_data/${issueId}.csv`, {
+            download: true,
+            complete: (results) => processAndChart(results.data, totalShares)
+        });
+    }
+
+    function processAndChart(csvData, totalShares) {
+        const rawByDate = {};
+        const brokers = new Set();
+
+        // Group by date
+        csvData.forEach(row => {
+            if (row.length < 3) return;
+            const [date, pid, shares] = row;
+            if (!rawByDate[date]) rawByDate[date] = {};
+            const name = participants[pid]?.n || `ID ${pid}`;
+            rawByDate[date][name] = parseInt(shares);
+            brokers.add(name);
+        });
+
+        const sortedDates = Object.keys(rawByDate).sort();
+        const brokerList = Array.from(brokers);
+        
+        // Carry-Forward Logic: State keeps track of last known balance for every broker
+        let state = {};
+        brokerList.forEach(b => state[b] = 0);
+
+        const chartData = {
+            dates: sortedDates,
+            datasets: {}
+        };
+
+        sortedDates.forEach(date => {
+            // Update state with any changes on this date
+            Object.assign(state, rawByDate[date]);
+            
+            let totalInCCASS = 0;
+            for (let b in state) {
+                if (!chartData.datasets[b]) chartData.datasets[b] = [];
+                const percent = (state[b] / totalShares) * 100;
+                chartData.datasets[b].push(percent);
+                totalInCCASS += percent;
+            }
+
+            // Calculate the "Strategic / Ruibang / CMBC" layer
+            if (!chartData.datasets['Strategic Holdings']) chartData.datasets['Strategic Holdings'] = [];
+            chartData.datasets['Strategic Holdings'].push(100 - totalInCCASS);
+        });
+
+        renderChart(chartData);
+    }
+
+    function renderChart(data) {
+        const ctx = document.getElementById('ownershipChart').getContext('2d');
+        if (chart) chart.destroy();
+
+        // Sort datasets to show Strategic at the bottom and largest brokers next
+        const lastIdx = data.dates.length - 1;
+        const sortedBrokerKeys = Object.keys(data.datasets)
+            .filter(k => k !== 'Strategic Holdings')
+            .sort((a, b) => data.datasets[b][lastIdx] - data.datasets[a][lastIdx])
+            .slice(0, 12); // Show top 12 brokers
+
+        const datasets = [
+            {
+                label: 'Strategic / Physical (Inside Holders)',
+                data: data.datasets['Strategic Holdings'],
+                backgroundColor: 'rgba(71, 85, 105, 0.4)',
+                fill: true, pointRadius: 0, borderWidth: 0
+            },
+            ...sortedBrokerKeys.map((name, i) => ({
+                label: name,
+                data: data.datasets[name],
+                backgroundColor: `hsla(${i * 40}, 70%, 50%, 0.8)`,
+                fill: true, pointRadius: 0, borderWidth: 1
+            }))
+        ];
+
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: data.dates, datasets: datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    y: { stacked: true, max: 100, title: { display: true, text: '% of Total Issued' } },
+                    x: { stacked: true }
+                },
+                plugins: {
+                    tooltip: { mode: 'index', intersect: false },
+                    legend: { position: 'right', labels: { color: '#f8fafc', font: { size: 10 } } }
+                }
+            }
+        });
+    }
+</script>
+</body>
+</html>
