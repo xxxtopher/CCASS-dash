@@ -3,39 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HKEX CCASS Holdings Dashboard</title>
+    <title>HKEX CCASS Stacked Analysis</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
     <style>
-        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f4f7f6; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
-        input { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
-        button { padding: 10px 20px; background: #2c3e50; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #34495e; }
-        #metaInfo { display: none; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; padding: 15px; background: #eef2f3; border-radius: 4px; }
-        .chart-container { position: relative; height: 50vh; width: 100%; }
-        .loading { display: none; color: #666; font-style: italic; }
+        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f0f2f5; }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .search-section { display: flex; gap: 10px; margin-bottom: 25px; }
+        input { flex: 1; padding: 12px; border: 1px solid #ccd0d5; border-radius: 6px; font-size: 16px; }
+        button { padding: 12px 24px; background: #1a73e8; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        button:hover { background: #1557b0; }
+        #metaInfo { display: none; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-left: 5px solid #1a73e8; border-radius: 4px; }
+        .chart-box { position: relative; height: 60vh; width: 100%; margin-top: 10px; }
+        .loader { display: none; text-align: center; color: #5f6368; font-style: italic; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>HKEX CCASS Concentration Tracker</h2>
+    <h2>CCASS Shareholder Concentration (100% Stacked)</h2>
     
-    <div class="search-box">
-        <input type="text" id="tickerInput" placeholder="Enter Ticker (e.g. 700), Name (e.g. Tencent), or ID (e.g. 3601)">
-        <button onclick="searchStock()">Search</button>
+    <div class="search-section">
+        <input type="text" id="tickerInput" placeholder="Search Ticker (e.g. 700), Name (e.g. Tencent), or IssueID">
+        <button onclick="searchStock()">Generate Chart</button>
     </div>
 
-    <div id="loading" class="loading">Fetching data from GitHub...</div>
+    <div id="loader" class="loader">Processing historical shareholding layers...</div>
 
     <div id="metaInfo">
         <div><strong>Company:</strong> <span id="sName">-</span></div>
-        <div><strong>Details:</strong> <span id="sIDs">-</span></div>
+        <div><strong>Data Mapping:</strong> <span id="sIDs">-</span></div>
     </div>
 
-    <div class="chart-container">
+    <div class="chart-box">
         <canvas id="ccassChart"></canvas>
     </div>
 </div>
@@ -44,50 +44,37 @@
     let stocksIndex = {};
     let myChart = null;
 
-    // Load the index on startup
-    async function loadIndex() {
+    // 1. Initial Load of the Search Index
+    async function init() {
         try {
-            const response = await fetch('stocks_index.json');
-            stocksIndex = await response.json();
-            console.log("Index loaded. Total entries:", Object.keys(stocksIndex).length);
+            const res = await fetch('stocks_index.json');
+            stocksIndex = await res.json();
+            console.log("Index ready.");
         } catch (e) {
-            console.error("Failed to load stocks_index.json", e);
-            alert("Error: Could not load the stock index file.");
+            console.error("Index load failed", e);
         }
     }
 
+    // 2. Deep Search Logic
     async function searchStock() {
         const input = document.getElementById('tickerInput').value.trim();
         if (!input) return;
 
-        // Standardize ticker search (e.g., 700 -> 00700)
-        const paddedInput = input.length <= 5 && !isNaN(input) ? input.padStart(5, '0') : input.toLowerCase();
+        const cleanInput = input.toLowerCase();
+        const paddedTicker = (input.length <= 5 && !isNaN(input)) ? input.padStart(5, '0') : null;
+        
         let found = null;
 
-        // --- DEEP SEARCH LOGIC ---
-        // 1. Try direct key match (The fastest way)
-        if (stocksIndex[paddedInput]) {
-            found = stocksIndex[paddedInput];
-        } 
-        // 2. Iterate through index if not found (Fuzzy/Internal match)
-        else {
+        // Direct Key Check
+        if (stocksIndex[paddedTicker]) {
+            found = stocksIndex[paddedTicker];
+        } else {
+            // Iterative Property Search
             for (let key in stocksIndex) {
                 const entry = stocksIndex[key];
-                
-                // Match by internal ticker
-                if (entry.ticker && entry.ticker.padStart(5, '0') === paddedInput) {
-                    found = entry;
-                    break;
-                }
-                
-                // Match by ID key (e.g., ID-3601)
-                if (key.toLowerCase() === `id-${input}` || entry.filename === input) {
-                    found = entry;
-                    break;
-                }
-
-                // Match by Name (Case-insensitive)
-                if (entry.name && entry.name.toLowerCase().includes(input.toLowerCase())) {
+                if (entry.ticker === paddedTicker || 
+                    entry.filename === input || 
+                    (entry.name && entry.name.toLowerCase().includes(cleanInput))) {
                     found = entry;
                     break;
                 }
@@ -95,80 +82,100 @@
         }
 
         if (found) {
-            updateUI(found);
+            renderDashboard(found);
         } else {
-            alert("Stock not found. Try searching by Name or ID.");
+            alert("No matching stock found in your CCASS repository.");
         }
     }
 
-    function updateUI(stock) {
+    function renderDashboard(stock) {
         document.getElementById('metaInfo').style.display = 'grid';
         document.getElementById('sName').innerText = stock.name;
-        document.getElementById('sIDs').innerText = `Ticker: ${stock.ticker || 'N/A'} | IssueID: ${stock.filename}`;
-        
-        // Use the filename property to find the CSV
-        fetchCcassData(stock.filename);
+        document.getElementById('sIDs').innerText = `Ticker: ${stock.ticker || 'N/A'} | ID: ${stock.filename}`;
+        loadPivotedCSV(stock.filename);
     }
 
-    async function fetchCcassData(filename) {
-        const loader = document.getElementById('loading');
+    // 3. High-Speed CSV Loader
+    async function loadPivotedCSV(filename) {
+        const loader = document.getElementById('loader');
         loader.style.display = 'block';
-        
-        // Path to your GitHub folder
-        const url = `ccass_data/${filename}.csv`;
+
+        // NOTE: Path points to the 'ccass_pivoted' folder created by your Python script
+        const url = `ccass_pivoted/${filename}.csv`;
 
         Papa.parse(url, {
             download: true,
             header: true,
+            dynamicTyping: true,
             skipEmptyLines: true,
             complete: function(results) {
                 loader.style.display = 'none';
-                renderChart(results.data);
+                buildStackedChart(results.data);
             },
-            error: function(err) {
+            error: function() {
                 loader.style.display = 'none';
-                console.error("CSV Load Error:", err);
-                alert(`Could not find data for ID ${filename}. Ensure the CSV exists in ccass_data/`);
+                alert("Error: Pivoted CSV not found. Please run the Python pre-processor script first.");
             }
         });
     }
 
-    function renderChart(data) {
+    // 4. Stacked Area Rendering Logic
+    function buildStackedChart(data) {
         const ctx = document.getElementById('ccassChart').getContext('2d');
         
-        // Assumes David Webb's CSV structure: date and share_percent (or similar)
-        // Adjust these keys based on your specific CSV column headers
-        const labels = data.map(row => row.date || Object.values(row)[0]); 
-        const values = data.map(row => parseFloat(Object.values(row)[1]) || 0);
+        // Extract dates and identify broker columns (excluding 'date' and index columns)
+        const labels = data.map(row => row.date || row['']); 
+        const keys = Object.keys(data[0]).filter(k => k !== 'date' && k !== '' && k !== 'Unnamed: 0');
+
+        const datasets = keys.map((broker, i) => {
+            const isOthers = broker.toLowerCase() === 'others';
+            return {
+                label: isOthers ? 'Strategic / Other Shareholders' : `Broker ID: ${broker}`,
+                data: data.map(row => row[broker] || 0),
+                fill: true,
+                // Using HSLA for distinct, semi-transparent layers
+                backgroundColor: isOthers ? 'rgba(180, 180, 180, 0.4)' : `hsla(${i * 32}, 65%, 50%, 0.75)`,
+                borderColor: isOthers ? 'rgba(150, 150, 150, 0.8)' : `hsla(${i * 32}, 65%, 40%, 1)`,
+                borderWidth: 1,
+                pointRadius: 0, // Performance: don't render individual points
+                lineTension: 0.1
+            };
+        });
 
         if (myChart) myChart.destroy();
 
         myChart = new Chart(ctx, {
             type: 'line',
-            data: {
-                labels: labels.reverse(), // Show oldest to newest
-                datasets: [{
-                    label: 'Top 10 Participants % Stake',
-                    data: values.reverse(),
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                    fill: true,
-                    tension: 0.3
-                }]
-            },
+            data: { labels, datasets },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 15, padding: 15 } },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.toFixed(2)}%`
+                        }
+                    }
+                },
                 scales: {
-                    y: { beginAtZero: false, title: { display: true, text: 'Concentration %' } },
-                    x: { title: { display: true, text: 'Snapshot Date' } }
+                    y: {
+                        stacked: true, // Key for Area Chart
+                        max: 100,      // Ensures it always stays at 100%
+                        beginAtZero: true,
+                        title: { display: true, text: 'Total % Shareholding' }
+                    },
+                    x: { 
+                        ticks: { maxTicksLimit: 12 },
+                        title: { display: true, text: 'Snapshot Date' }
+                    }
                 }
             }
         });
     }
 
-    // Initialize
-    loadIndex();
+    init();
 </script>
 
 </body>
