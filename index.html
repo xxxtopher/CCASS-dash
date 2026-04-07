@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock Price & CCASS Dashboard</title>
+    <title>Stock & CCASS Analysis Dashboard</title>
     
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1"></script>
     <script src="https://cdn.jsdelivr.net/npm/luxon@3.0.1/build/global/luxon.min.js"></script>
@@ -12,16 +12,17 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
     
     <style>
-        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f0f2f5; }
-        .container { max-width: 1200px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
-        h2 { margin: 0; color: #1a1a1a; font-size: 1.5rem; }
-        .search-box { display: flex; gap: 10px; }
-        input#stock-search { padding: 10px; border-radius: 6px; border: 1px solid #ccd0d5; width: 220px; }
-        button#generate-btn { padding: 10px 20px; background: #1877f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #f4f7f9; color: #333; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #edf2f7; }
+        h2 { margin: 0; font-size: 1.5rem; color: #2d3748; }
+        .search-area { display: flex; gap: 10px; }
+        input#stock-search { padding: 10px 15px; border-radius: 6px; border: 1px solid #cbd5e0; width: 240px; font-size: 14px; }
+        button#generate-btn { padding: 10px 20px; background: #3182ce; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; }
+        button#generate-btn:hover { background: #2b6cb0; }
         
-        .chart-section { height: 350px; width: 100%; margin-bottom: 30px; position: relative; }
-        .section-label { font-size: 0.9rem; color: #65676b; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
+        .chart-wrapper { position: relative; height: 350px; width: 100%; margin-bottom: 40px; }
+        .label-tag { display: inline-block; background: #edf2f7; color: #4a5568; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -29,29 +30,34 @@
 <div class="container">
     <div class="header">
         <h2 id="display-title">Market Analysis Dashboard</h2>
-        <div class="search-box">
-            <input type="text" id="stock-search" list="stock-options" placeholder="Stock Code (e.g. 00001)" autocomplete="off">
+        <div class="search-area">
+            <input type="text" id="stock-search" list="stock-options" placeholder="Stock Code (e.g. 00005)" autocomplete="off">
             <datalist id="stock-options"></datalist>
             <button id="generate-btn">Analyze</button>
         </div>
     </div>
 
-    <div class="section-label">Stock Price Trend (OHLC)</div>
-    <div class="chart-section">
-        <canvas id="priceChart"></canvas>
+    <div>
+        <span class="label-tag">Price Action (OHLC)</span>
+        <div class="chart-wrapper">
+            <canvas id="priceChart"></canvas>
+        </div>
     </div>
 
-    <div class="section-label">CCASS Broker Concentration (Stacked %)</div>
-    <div class="chart-section">
-        <canvas id="ccassChart"></canvas>
+    <div>
+        <span class="label-tag">CCASS Concentration (Stacked Area)</span>
+        <div class="chart-wrapper">
+            <canvas id="ccassChart"></canvas>
+        </div>
     </div>
 </div>
 
 <script>
 let stocksIndex = {};
-let priceChart, ccassChart;
+let priceChartInstance = null;
+let ccassChartInstance = null;
 
-// 1. Load Index
+// 1. Load the Stock Index for the search box
 fetch('stocks_index.json')
     .then(r => r.json())
     .then(data => {
@@ -65,47 +71,52 @@ fetch('stocks_index.json')
         });
     });
 
-// 2. Control Logic
+// 2. Event Listeners
 const searchInput = document.getElementById('stock-search');
-const generateBtn = document.getElementById('generate-btn');
+const btn = document.getElementById('generate-btn');
 
-searchInput.addEventListener('keypress', e => { if (e.key === 'Enter') generateBtn.click(); });
+searchInput.addEventListener('keypress', e => { if (e.key === 'Enter') btn.click(); });
 
-generateBtn.addEventListener('click', () => {
+btn.addEventListener('click', async () => {
     let code = searchInput.value.trim();
     if (code.length > 0 && code.length < 5 && !isNaN(code)) {
         code = code.padStart(5, '0');
         searchInput.value = code;
     }
-    if (stocksIndex[code]) loadAllData(code);
-    else alert("Invalid Stock Code");
+    
+    if (stocksIndex[code]) {
+        await loadDashboard(code);
+    } else {
+        alert("Stock code not recognized.");
+    }
 });
 
-async function loadAllData(code) {
-    document.getElementById('display-title').innerText = `${stocksIndex[code].name} (${code})`;
+// 3. Data Loading Engine
+async function loadDashboard(code) {
+    // FORCE DESTROY existing charts to prevent "Canvas in use" error
+    const pCanvas = document.getElementById('priceChart');
+    const cCanvas = document.getElementById('ccassChart');
     
-    // Check files in console
-    console.log(`Fetching price: price_data/${code}.csv`);
-    console.log(`Fetching CCASS: ccass_pivoted/${code}.csv`);
+    const oldP = Chart.getChart(pCanvas);
+    if (oldP) oldP.destroy();
+    
+    const oldC = Chart.getChart(cCanvas);
+    if (oldC) oldC.destroy();
 
-    const [priceRes, ccassRes] = await Promise.all([
+    document.getElementById('display-title').innerText = `${stocksIndex[code].name} (${code})`;
+
+    // Parallel fetch for speed
+    const [priceData, ccassData] = await Promise.all([
         fetchCSV(`price_data/${code}.csv`),
         fetchCSV(`ccass_pivoted/${code}.csv`)
     ]);
 
-    if (priceRes && priceRes.length > 0) {
-        renderPriceChart(priceRes);
-    } else {
-        console.error("Price data is empty or missing.");
-    }
-
-    if (ccassRes && ccassRes.length > 0) {
-        renderCCASSChart(ccassRes);
-    }
+    if (priceData && priceData.length > 0) renderPrice(priceData, pCanvas);
+    if (ccassData && ccassData.length > 0) renderCCASS(ccassData, cCanvas);
 }
 
 function fetchCSV(url) {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
         Papa.parse(url, {
             download: true, header: true, dynamicTyping: true, skipEmptyLines: true,
             complete: r => resolve(r.data),
@@ -114,23 +125,17 @@ function fetchCSV(url) {
     });
 }
 
-function renderPriceChart(data) {
-    const ctx = document.getElementById('priceChart').getContext('2d');
-    
-    // Critical: Ensure columns exist. Yahoo might capitalize them if the scraper failed.
+// 4. Rendering Functions
+function renderPrice(data, canvas) {
     const ohlc = data.map(d => ({
         x: luxon.DateTime.fromISO(d.date || d.Date).valueOf(),
         o: d.open || d.Open,
         h: d.high || d.High,
         l: d.low || d.Low,
         c: d.close || d.Close
-    })).filter(d => d.x && d.c); // Filter out rows where date/close is missing
+    })).filter(d => d.x && d.c);
 
-    console.log("Processed OHLC Data:", ohlc);
-
-    if (priceChart) priceChart.destroy();
-    
-    priceChart = new Chart(ctx, {
+    priceChartInstance = new Chart(canvas.getContext('2d'), {
         type: 'candlestick',
         data: {
             datasets: [{
@@ -144,33 +149,23 @@ function renderPriceChart(data) {
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-                x: {
-                    type: 'time',
-                    time: { unit: 'day' },
-                    grid: { display: false }
-                },
-                y: {
-                    position: 'right',
-                    grid: { color: '#f0f0f0' }
-                }
+                x: { type: 'time', time: { unit: 'day' }, grid: { display: false } },
+                y: { position: 'right', grid: { color: '#f0f0f0' } }
             },
-            plugins: {
-                legend: { display: false }
-            }
+            plugins: { legend: { display: false } }
         }
     });
 }
 
-function renderCCASSChart(data) {
-    const ctx = document.getElementById('ccassChart').getContext('2d');
+function renderCCASS(data, canvas) {
     const labels = data.map(d => d.date);
     const brokers = Object.keys(data[0]).filter(k => k !== 'date');
-    const colors = ['#36a2eb', '#ff6384', '#4bc0c0', '#ffcd56', '#9966ff', '#ff9f40', '#c9c9c9', '#5366ff', '#28a745', '#dc3545'];
+    const colors = ['#3182ce', '#e53e3e', '#38a169', '#dd6b20', '#805ad5', '#d69e2e', '#718096', '#319795', '#d53f8c', '#2c5282'];
 
     const datasets = brokers.map((b, i) => ({
         label: `${b} (${data[data.length-1][b].toFixed(2)}%)`,
         data: data.map(d => d[b]),
-        backgroundColor: colors[i % colors.length] + 'b3',
+        backgroundColor: colors[i % colors.length] + 'cc', // 80% opacity
         borderColor: colors[i % colors.length],
         fill: true,
         pointRadius: 0,
@@ -178,8 +173,7 @@ function renderCCASSChart(data) {
         tension: 0.1
     }));
 
-    if (ccassChart) ccassChart.destroy();
-    ccassChart = new Chart(ctx, {
+    ccassChartInstance = new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: { labels, datasets },
         options: {
@@ -189,6 +183,7 @@ function renderCCASSChart(data) {
                 x: { grid: { display: false } },
                 y: { 
                     stacked: true, 
+                    beginAtZero: true,
                     ticks: { callback: v => v + '%' },
                     grid: { color: '#f0f0f0' }
                 }
