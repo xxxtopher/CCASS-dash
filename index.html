@@ -3,172 +3,154 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CCASS Shareholding Dashboard</title>
+    <title>Stock Price & CCASS Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    
     <style>
-        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f5f5f5; }
-        .container { max-width: 1100px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 20px; }
-        h2 { margin: 0; color: #333; flex-grow: 1; font-size: 1.4rem; }
-        .search-box { position: relative; display: flex; gap: 10px; }
-        input#stock-search { padding: 10px; border-radius: 4px; border: 1px solid #ddd; width: 250px; font-size: 1rem; }
-        button#generate-btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        button#generate-btn:hover { background: #0056b3; }
-        .chart-container { position: relative; height: 65vh; width: 100%; margin-top: 10px; }
+        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f0f2f5; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+        h2 { margin: 0; color: #1a1a1a; font-size: 1.5rem; }
+        .search-box { display: flex; gap: 10px; }
+        input#stock-search { padding: 10px; border-radius: 6px; border: 1px solid #ccd0d5; width: 220px; outline: none; }
+        button#generate-btn { padding: 10px 20px; background: #1877f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: 0.2s; }
+        button#generate-btn:hover { background: #166fe5; }
+        
+        .chart-section { height: 400px; width: 100%; margin-bottom: 30px; }
+        .section-label { font-size: 0.9rem; color: #65676b; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <div class="header">
-        <h2 id="display-title">Enter Stock Code to Begin</h2>
-        
+        <h2 id="display-title">Market Analysis Dashboard</h2>
         <div class="search-box">
-            <input type="text" id="stock-search" list="stock-options" placeholder="Search Code (e.g. 00001)" autocomplete="off">
+            <input type="text" id="stock-search" list="stock-options" placeholder="Stock Code (e.g. 00001)" autocomplete="off">
             <datalist id="stock-options"></datalist>
-            <button id="generate-btn">Generate Chart</button>
+            <button id="generate-btn">Analyze</button>
         </div>
     </div>
 
-    <div class="chart-container">
+    <div class="section-label">Stock Price Trend (OHLC)</div>
+    <div class="chart-section">
+        <canvas id="priceChart"></canvas>
+    </div>
+
+    <div class="section-label">CCASS Broker Concentration (Stacked %)</div>
+    <div class="chart-section">
         <canvas id="ccassChart"></canvas>
     </div>
 </div>
 
 <script>
 let stocksIndex = {};
-let ccassChart;
+let priceChart, ccassChart;
 
-// 1. Load the Stock Index and populate the datalist
+// 1. Load Index
 fetch('stocks_index.json')
-    .then(response => response.json())
+    .then(r => r.json())
     .then(data => {
         stocksIndex = data;
-        const datalist = document.getElementById('stock-options');
-        
-        // Populate datalist for visual suggestions
-        Object.keys(stocksIndex).sort().forEach(code => {
-            const option = document.createElement('option');
-            option.value = code;
-            option.label = stocksIndex[code].name;
-            datalist.appendChild(option);
+        const dl = document.getElementById('stock-options');
+        Object.keys(data).sort().forEach(code => {
+            const opt = document.createElement('option');
+            opt.value = code;
+            opt.label = data[code].name;
+            dl.appendChild(opt);
         });
     });
 
-// 2. Handle the "Enter" key and Button Click
+// 2. Control Logic
 const searchInput = document.getElementById('stock-search');
 const generateBtn = document.getElementById('generate-btn');
 
-searchInput.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') {
-        generateBtn.click();
-    }
-});
+searchInput.addEventListener('keypress', e => { if (e.key === 'Enter') generateBtn.click(); });
 
-generateBtn.addEventListener('click', function() {
+generateBtn.addEventListener('click', () => {
     let code = searchInput.value.trim();
-    
-    // Auto-correction: if input is "1", convert to "00001"
     if (code.length > 0 && code.length < 5 && !isNaN(code)) {
         code = code.padStart(5, '0');
         searchInput.value = code;
     }
-
-    if (stocksIndex[code]) {
-        loadData(code);
-    } else {
-        alert("Stock code not found in index. Please check the code.");
-    }
+    if (stocksIndex[code]) loadAllData(code);
+    else alert("Invalid Stock Code");
 });
 
-function loadData(stockCode) {
-    const name = stocksIndex[stockCode] ? stocksIndex[stockCode].name : "Unknown";
-    document.getElementById('display-title').innerText = `${name} (${stockCode})`;
+async function loadAllData(code) {
+    document.getElementById('display-title').innerText = `${stocksIndex[code].name} (${code})`;
+    
+    // Fetch Price and CCASS Data in parallel
+    const [priceRes, ccassRes] = await Promise.all([
+        fetchCSV(`price_data/${code}.csv`),
+        fetchCSV(`ccass_pivoted/${code}.csv`)
+    ]);
 
-    Papa.parse(`ccass_pivoted/${stockCode}.csv`, {
-        download: true,
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        complete: function(results) {
-            if (results.data && results.data.length > 0) {
-                renderChart(results.data);
-            } else {
-                alert("No data available for this stock.");
-            }
-        },
-        error: function() {
-            alert("Could not find the data file for this stock code.");
+    if (priceRes) renderPriceChart(priceRes);
+    if (ccassRes) renderCCASSChart(ccassRes);
+}
+
+function fetchCSV(url) {
+    return new Promise((resolve) => {
+        Papa.parse(url, {
+            download: true, header: true, dynamicTyping: true, skipEmptyLines: true,
+            complete: r => resolve(r.data),
+            error: () => resolve(null)
+        });
+    });
+}
+
+function renderPriceChart(data) {
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    const ohlc = data.map(d => ({
+        x: luxon.DateTime.fromISO(d.date).valueOf(),
+        o: d.open, h: d.high, l: d.low, c: d.close
+    }));
+
+    if (priceChart) priceChart.destroy();
+    priceChart = new Chart(ctx, {
+        type: 'candlestick',
+        data: { datasets: [{ label: 'Price', data: ohlc, color: { up: '#26a69a', down: '#ef5350', unchanged: '#999' } }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: { x: { type: 'time', time: { unit: 'day' } }, y: { position: 'right' } },
+            plugins: { legend: { display: false } }
         }
     });
 }
 
-function renderChart(csvData) {
+function renderCCASSChart(data) {
     const ctx = document.getElementById('ccassChart').getContext('2d');
-    const cleanData = csvData.filter(row => row.date);
-    const dates = cleanData.map(row => row.date);
-    const brokers = Object.keys(cleanData[0]).filter(key => key !== 'date');
-    const latestRow = cleanData[cleanData.length - 1];
-    
-    // Pre-defined color palette for better visual separation in stacked areas
-    const colors = [
-        'rgba(54, 162, 235, 0.7)', 'rgba(255, 99, 132, 0.7)', 'rgba(75, 192, 192, 0.7)',
-        'rgba(255, 206, 86, 0.7)', 'rgba(153, 102, 255, 0.7)', 'rgba(255, 159, 64, 0.7)',
-        'rgba(199, 199, 199, 0.7)', 'rgba(83, 102, 255, 0.7)', 'rgba(40, 167, 69, 0.7)',
-        'rgba(220, 53, 69, 0.7)'
-    ];
+    const labels = data.map(d => d.date);
+    const brokers = Object.keys(data[0]).filter(k => k !== 'date');
+    const colors = ['#36a2eb', '#ff6384', '#4bc0c0', '#ffcd56', '#9966ff', '#ff9f40', '#c9c9c9', '#5366ff', '#28a745', '#dc3545'];
 
-    const datasets = brokers.map((broker, index) => {
-        const latestPct = latestRow[broker] ? latestRow[broker].toFixed(2) : "0.00";
-        return {
-            label: `${broker} (${latestPct}%)`, 
-            data: cleanData.map(row => row[broker]),
-            backgroundColor: colors[index % colors.length],
-            borderColor: colors[index % colors.length].replace('0.7', '1'),
-            borderWidth: 1,
-            pointRadius: 0,
-            fill: true, // Required for Area Chart
-            tension: 0.1
-        };
-    });
+    const datasets = brokers.map((b, i) => ({
+        label: `${b} (${data[data.length-1][b].toFixed(2)}%)`,
+        data: data.map(d => d[b]),
+        backgroundColor: colors[i % colors.length] + 'b3',
+        borderColor: colors[i % colors.length],
+        fill: true, pointRadius: 0, borderWidth: 1
+    }));
 
     if (ccassChart) ccassChart.destroy();
-
     ccassChart = new Chart(ctx, {
         type: 'line',
-        data: { labels: dates, datasets: datasets },
+        data: { labels, datasets },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            scales: {
-                y: {
-                    stacked: true, // Enable Stacking
-                    beginAtZero: true,
-                    title: { display: true, text: '% of Total Issued Shares' },
-                    ticks: { callback: value => value + '%' }
-                }
-            },
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: { boxWidth: 12, padding: 10, font: { size: 10 } }
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            let label = context.dataset.label.split(' (')[0];
-                            let val = context.parsed.y.toFixed(4);
-                            return `${label}: ${val}%`;
-                        }
-                    }
-                }
+            responsive: true, maintainAspectRatio: false,
+            scales: { y: { stacked: true, ticks: { callback: v => v + '%' } } },
+            plugins: { 
+                legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
+                tooltip: { mode: 'index', intersect: false }
             }
         }
     });
 }
 </script>
-
 </body>
 </html>
