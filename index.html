@@ -8,21 +8,27 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
     <style>
         body { font-family: -apple-system, sans-serif; margin: 20px; background: #f5f5f5; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        h2 { margin: 0; color: #333; }
-        #stock-selector { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 300px; }
-        .chart-container { position: relative; height: 60vh; width: 100%; }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 20px; }
+        h2 { margin: 0; color: #333; flex-grow: 1; font-size: 1.4rem; }
+        .search-box { position: relative; display: flex; gap: 10px; }
+        input#stock-search { padding: 10px; border-radius: 4px; border: 1px solid #ddd; width: 250px; font-size: 1rem; }
+        button#generate-btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button#generate-btn:hover { background: #0056b3; }
+        .chart-container { position: relative; height: 65vh; width: 100%; margin-top: 10px; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <div class="header">
-        <h2 id="display-title">Select a Stock</h2>
-        <select id="stock-selector">
-            <option value="">Loading stocks...</option>
-        </select>
+        <h2 id="display-title">Enter Stock Code to Begin</h2>
+        
+        <div class="search-box">
+            <input type="text" id="stock-search" list="stock-options" placeholder="Search Code (e.g. 00001)" autocomplete="off">
+            <datalist id="stock-options"></datalist>
+            <button id="generate-btn">Generate Chart</button>
+        </div>
     </div>
 
     <div class="chart-container">
@@ -34,30 +40,49 @@
 let stocksIndex = {};
 let ccassChart;
 
-// 1. Load the Stock Index (Mapping codes to Names)
+// 1. Load the Stock Index and populate the datalist
 fetch('stocks_index.json')
     .then(response => response.json())
     .then(data => {
         stocksIndex = data;
-        const selector = document.getElementById('stock-selector');
-        selector.innerHTML = '<option value="">-- Search Stock --</option>';
+        const datalist = document.getElementById('stock-options');
         
-        // Populate dropdown
+        // Populate datalist for visual suggestions
         Object.keys(stocksIndex).sort().forEach(code => {
             const option = document.createElement('option');
             option.value = code;
-            option.text = `${code} - ${stocksIndex[code].name}`;
-            selector.appendChild(option);
+            option.label = stocksIndex[code].name;
+            datalist.appendChild(option);
         });
     });
 
-document.getElementById('stock-selector').addEventListener('change', function(e) {
-    const code = e.target.value;
-    if (code) loadData(code);
+// 2. Handle the "Enter" key and Button Click
+const searchInput = document.getElementById('stock-search');
+const generateBtn = document.getElementById('generate-btn');
+
+searchInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        generateBtn.click();
+    }
+});
+
+generateBtn.addEventListener('click', function() {
+    let code = searchInput.value.trim();
+    
+    // Auto-correction: if input is "1", convert to "00001"
+    if (code.length > 0 && code.length < 5 && !isNaN(code)) {
+        code = code.padStart(5, '0');
+        searchInput.value = code;
+    }
+
+    if (stocksIndex[code]) {
+        loadData(code);
+    } else {
+        alert("Stock code not found in index. Please check the code.");
+    }
 });
 
 function loadData(stockCode) {
-    // 2. Update Title with Name + Code
     const name = stocksIndex[stockCode] ? stocksIndex[stockCode].name : "Unknown";
     document.getElementById('display-title').innerText = `${name} (${stockCode})`;
 
@@ -65,33 +90,46 @@ function loadData(stockCode) {
         download: true,
         header: true,
         dynamicTyping: true,
+        skipEmptyLines: true,
         complete: function(results) {
-            renderChart(results.data);
+            if (results.data && results.data.length > 0) {
+                renderChart(results.data);
+            } else {
+                alert("No data available for this stock.");
+            }
+        },
+        error: function() {
+            alert("Could not find the data file for this stock code.");
         }
     });
 }
 
 function renderChart(csvData) {
     const ctx = document.getElementById('ccassChart').getContext('2d');
-    
-    // Filter out empty rows
     const cleanData = csvData.filter(row => row.date);
     const dates = cleanData.map(row => row.date);
     const brokers = Object.keys(cleanData[0]).filter(key => key !== 'date');
-
-    // 3. Create datasets with % in the legend
     const latestRow = cleanData[cleanData.length - 1];
     
+    // Pre-defined color palette for better visual separation in stacked areas
+    const colors = [
+        'rgba(54, 162, 235, 0.7)', 'rgba(255, 99, 132, 0.7)', 'rgba(75, 192, 192, 0.7)',
+        'rgba(255, 206, 86, 0.7)', 'rgba(153, 102, 255, 0.7)', 'rgba(255, 159, 64, 0.7)',
+        'rgba(199, 199, 199, 0.7)', 'rgba(83, 102, 255, 0.7)', 'rgba(40, 167, 69, 0.7)',
+        'rgba(220, 53, 69, 0.7)'
+    ];
+
     const datasets = brokers.map((broker, index) => {
         const latestPct = latestRow[broker] ? latestRow[broker].toFixed(2) : "0.00";
         return {
-            // Broker Name + Latest % for the legend
             label: `${broker} (${latestPct}%)`, 
             data: cleanData.map(row => row[broker]),
-            borderWidth: 2,
+            backgroundColor: colors[index % colors.length],
+            borderColor: colors[index % colors.length].replace('0.7', '1'),
+            borderWidth: 1,
             pointRadius: 0,
-            tension: 0.1,
-            fill: false
+            fill: true, // Required for Area Chart
+            tension: 0.1
         };
     });
 
@@ -106,6 +144,8 @@ function renderChart(csvData) {
             interaction: { mode: 'index', intersect: false },
             scales: {
                 y: {
+                    stacked: true, // Enable Stacking
+                    beginAtZero: true,
                     title: { display: true, text: '% of Total Issued Shares' },
                     ticks: { callback: value => value + '%' }
                 }
@@ -113,12 +153,14 @@ function renderChart(csvData) {
             plugins: {
                 legend: {
                     position: 'bottom',
-                    labels: { boxWidth: 12, padding: 15, font: { size: 11 } }
+                    labels: { boxWidth: 12, padding: 10, font: { size: 10 } }
                 },
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            return `${context.dataset.label.split(' (')[0]}: ${context.parsed.y.toFixed(4)}%`;
+                            let label = context.dataset.label.split(' (')[0];
+                            let val = context.parsed.y.toFixed(4);
+                            return `${label}: ${val}%`;
                         }
                     }
                 }
