@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Stock Price & CCASS Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.0.1/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.2.0/dist/chartjs-adapter-luxon.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1/dist/chartjs-chart-financial.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
     
     <style>
@@ -16,11 +17,10 @@
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
         h2 { margin: 0; color: #1a1a1a; font-size: 1.5rem; }
         .search-box { display: flex; gap: 10px; }
-        input#stock-search { padding: 10px; border-radius: 6px; border: 1px solid #ccd0d5; width: 220px; outline: none; }
-        button#generate-btn { padding: 10px 20px; background: #1877f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: 0.2s; }
-        button#generate-btn:hover { background: #166fe5; }
+        input#stock-search { padding: 10px; border-radius: 6px; border: 1px solid #ccd0d5; width: 220px; }
+        button#generate-btn { padding: 10px 20px; background: #1877f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
         
-        .chart-section { height: 400px; width: 100%; margin-bottom: 30px; }
+        .chart-section { height: 350px; width: 100%; margin-bottom: 30px; position: relative; }
         .section-label { font-size: 0.9rem; color: #65676b; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
     </style>
 </head>
@@ -84,14 +84,24 @@ generateBtn.addEventListener('click', () => {
 async function loadAllData(code) {
     document.getElementById('display-title').innerText = `${stocksIndex[code].name} (${code})`;
     
-    // Fetch Price and CCASS Data in parallel
+    // Check files in console
+    console.log(`Fetching price: price_data/${code}.csv`);
+    console.log(`Fetching CCASS: ccass_pivoted/${code}.csv`);
+
     const [priceRes, ccassRes] = await Promise.all([
         fetchCSV(`price_data/${code}.csv`),
         fetchCSV(`ccass_pivoted/${code}.csv`)
     ]);
 
-    if (priceRes) renderPriceChart(priceRes);
-    if (ccassRes) renderCCASSChart(ccassRes);
+    if (priceRes && priceRes.length > 0) {
+        renderPriceChart(priceRes);
+    } else {
+        console.error("Price data is empty or missing.");
+    }
+
+    if (ccassRes && ccassRes.length > 0) {
+        renderCCASSChart(ccassRes);
+    }
 }
 
 function fetchCSV(url) {
@@ -106,19 +116,47 @@ function fetchCSV(url) {
 
 function renderPriceChart(data) {
     const ctx = document.getElementById('priceChart').getContext('2d');
+    
+    // Critical: Ensure columns exist. Yahoo might capitalize them if the scraper failed.
     const ohlc = data.map(d => ({
-        x: luxon.DateTime.fromISO(d.date).valueOf(),
-        o: d.open, h: d.high, l: d.low, c: d.close
-    }));
+        x: luxon.DateTime.fromISO(d.date || d.Date).valueOf(),
+        o: d.open || d.Open,
+        h: d.high || d.High,
+        l: d.low || d.Low,
+        c: d.close || d.Close
+    })).filter(d => d.x && d.c); // Filter out rows where date/close is missing
+
+    console.log("Processed OHLC Data:", ohlc);
 
     if (priceChart) priceChart.destroy();
+    
     priceChart = new Chart(ctx, {
         type: 'candlestick',
-        data: { datasets: [{ label: 'Price', data: ohlc, color: { up: '#26a69a', down: '#ef5350', unchanged: '#999' } }] },
+        data: {
+            datasets: [{
+                label: 'Price',
+                data: ohlc,
+                color: { up: '#26a69a', down: '#ef5350', unchanged: '#999' },
+                borderColor: { up: '#26a69a', down: '#ef5350', unchanged: '#999' }
+            }]
+        },
         options: {
-            responsive: true, maintainAspectRatio: false,
-            scales: { x: { type: 'time', time: { unit: 'day' } }, y: { position: 'right' } },
-            plugins: { legend: { display: false } }
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    type: 'time',
+                    time: { unit: 'day' },
+                    grid: { display: false }
+                },
+                y: {
+                    position: 'right',
+                    grid: { color: '#f0f0f0' }
+                }
+            },
+            plugins: {
+                legend: { display: false }
+            }
         }
     });
 }
@@ -134,7 +172,10 @@ function renderCCASSChart(data) {
         data: data.map(d => d[b]),
         backgroundColor: colors[i % colors.length] + 'b3',
         borderColor: colors[i % colors.length],
-        fill: true, pointRadius: 0, borderWidth: 1
+        fill: true,
+        pointRadius: 0,
+        borderWidth: 1,
+        tension: 0.1
     }));
 
     if (ccassChart) ccassChart.destroy();
@@ -142,8 +183,16 @@ function renderCCASSChart(data) {
         type: 'line',
         data: { labels, datasets },
         options: {
-            responsive: true, maintainAspectRatio: false,
-            scales: { y: { stacked: true, ticks: { callback: v => v + '%' } } },
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { grid: { display: false } },
+                y: { 
+                    stacked: true, 
+                    ticks: { callback: v => v + '%' },
+                    grid: { color: '#f0f0f0' }
+                }
+            },
             plugins: { 
                 legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
                 tooltip: { mode: 'index', intersect: false }
