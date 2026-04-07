@@ -2,92 +2,131 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>CCASS Shareholding Analysis</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CCASS Shareholding Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #f8f9fa; }
-        .controls { margin-bottom: 20px; padding: 15px; background: white; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        input { padding: 8px; width: 250px; border: 1px solid #ccc; }
-        button { padding: 8px 15px; background: #004481; color: white; border: none; cursor: pointer; }
-        #chart { width: 100%; height: 700px; margin-top: 20px; }
+        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h2 { margin: 0; color: #333; }
+        #stock-selector { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 300px; }
+        .chart-container { position: relative; height: 60vh; width: 100%; }
     </style>
 </head>
 <body>
 
-<div class="controls">
-    <input type="text" id="stockInput" placeholder="Enter Stock Code (e.g. 00005)">
-    <button onclick="updateChart()">View Analysis</button>
+<div class="container">
+    <div class="header">
+        <h2 id="display-title">Select a Stock</h2>
+        <select id="stock-selector">
+            <option value="">Loading stocks...</option>
+        </select>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="ccassChart"></canvas>
+    </div>
 </div>
-<div id="chart"></div>
 
 <script>
-let shareReference = {};
+let stocksIndex = {};
+let ccassChart;
 
-// 1. Load the total shares reference first
-Papa.parse("total_shares_reference.csv", {
-    download: true,
-    header: true,
-    skipEmptyLines: true,
-    complete: function(results) {
-        results.data.forEach(row => {
-            if (row.StockCode) {
-                // Ensure key is 5-digit string
-                let code = row.StockCode.toString().padStart(5, '0');
-                shareReference[code] = parseFloat(row.TotalShares);
-            }
+// 1. Load the Stock Index (Mapping codes to Names)
+fetch('stocks_index.json')
+    .then(response => response.json())
+    .then(data => {
+        stocksIndex = data;
+        const selector = document.getElementById('stock-selector');
+        selector.innerHTML = '<option value="">-- Search Stock --</option>';
+        
+        // Populate dropdown
+        Object.keys(stocksIndex).sort().forEach(code => {
+            const option = document.createElement('option');
+            option.value = code;
+            option.text = `${code} - ${stocksIndex[code].name}`;
+            selector.appendChild(option);
         });
-        console.log("Total shares reference loaded.");
-    }
+    });
+
+document.getElementById('stock-selector').addEventListener('change', function(e) {
+    const code = e.target.value;
+    if (code) loadData(code);
 });
 
-function updateChart() {
-    let code = document.getElementById('stockInput').value.trim().padStart(5, '0');
-    let totalShares = shareReference[code];
+function loadData(stockCode) {
+    // 2. Update Title with Name + Code
+    const name = stocksIndex[stockCode] ? stocksIndex[stockCode].name : "Unknown";
+    document.getElementById('display-title').innerText = `${name} (${stockCode})`;
 
-    if (!totalShares) {
-        console.warn("Total shares not found for this code. Displaying raw share counts.");
-    }
-
-    Papa.parse(`ccass_pivoted/${code}.csv`, {
+    Papa.parse(`ccass_pivoted/${stockCode}.csv`, {
         download: true,
         header: true,
-        skipEmptyLines: true,
+        dynamicTyping: true,
         complete: function(results) {
-            let csvData = results.data;
-            let dates = csvData.map(r => r.date);
-            let brokerNames = Object.keys(csvData[0]).filter(k => k !== 'date');
+            renderChart(results.data);
+        }
+    });
+}
 
-            let traces = brokerNames.map(name => {
-                return {
-                    x: dates,
-                    y: csvData.map(r => {
-                        let shares = parseFloat(r[name]) || 0;
-                        // Return percentage if totalShares is known, else raw
-                        return totalShares ? (shares / totalShares) * 100 : shares;
-                    }),
-                    name: name,
-                    stackgroup: 'one',
-                    mode: 'none'
-                };
-            });
+function renderChart(csvData) {
+    const ctx = document.getElementById('ccassChart').getContext('2d');
+    
+    // Filter out empty rows
+    const cleanData = csvData.filter(row => row.date);
+    const dates = cleanData.map(row => row.date);
+    const brokers = Object.keys(cleanData[0]).filter(key => key !== 'date');
 
-            let layout = {
-                title: `Top 10 Broker Concentration - Stock ${code}`,
-                xaxis: { title: 'Date' },
-                yaxis: { 
-                    title: totalShares ? 'Percentage of Issued Shares (%)' : 'Number of Shares',
-                    ticksuffix: totalShares ? '%' : ''
+    // 3. Create datasets with % in the legend
+    const latestRow = cleanData[cleanData.length - 1];
+    
+    const datasets = brokers.map((broker, index) => {
+        const latestPct = latestRow[broker] ? latestRow[broker].toFixed(2) : "0.00";
+        return {
+            // Broker Name + Latest % for the legend
+            label: `${broker} (${latestPct}%)`, 
+            data: cleanData.map(row => row[broker]),
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.1,
+            fill: false
+        };
+    });
+
+    if (ccassChart) ccassChart.destroy();
+
+    ccassChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: dates, datasets: datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y: {
+                    title: { display: true, text: '% of Total Issued Shares' },
+                    ticks: { callback: value => value + '%' }
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: { boxWidth: 12, padding: 15, font: { size: 11 } }
                 },
-                hovermode: 'x unified',
-                legend: { orientation: 'h', y: -0.2 }
-            };
-
-            Plotly.newPlot('chart', traces, layout);
-        },
-        error: function() { alert("Could not find data for this stock code."); }
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label.split(' (')[0]}: ${context.parsed.y.toFixed(4)}%`;
+                        }
+                    }
+                }
+            }
+        }
     });
 }
 </script>
+
 </body>
 </html>
