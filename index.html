@@ -122,9 +122,28 @@ async function renderDashboard(code) {
             }] 
         },
         options: {
-            responsive: true, maintainAspectRatio: false,
-            scales: { x: sharedXAxis, y: { position: 'right' } },
-            plugins: { legend: { display: false } }
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { 
+                x: sharedXAxis, 
+                y: { position: 'right' } 
+            },
+            plugins: { 
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const d = context.raw;
+                            // Format each value to 2 decimal places
+                            const o = d.o.toFixed(2);
+                            const h = d.h.toFixed(2);
+                            const l = d.l.toFixed(2);
+                            const c = d.c.toFixed(2);
+                            return ` O: ${o}  H: ${h}  L: ${l}  C: ${c}`;
+                        }
+                    }
+                }
+            }
         }
     });
 
