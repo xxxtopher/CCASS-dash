@@ -1,75 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock & CCASS Dashboard (v10)</title>
-    <style>
-        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f8fafc; color: #1e293b; }
-        .container { max-width: 1200px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-        .search-area { display: flex; gap: 8px; }
-        input#stock-search { padding: 10px; border: 1px solid #e2e8f0; border-radius: 6px; width: 200px; }
-        button#generate-btn { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; }
-        .chart-wrapper { height: 350px; margin-bottom: 40px; }
-        .tag { font-size: 12px; font-weight: bold; color: #64748b; text-transform: uppercase; margin-bottom: 8px; display: block; }
-    </style>
-</head>
-<body>
-
-<div class="container">
-    <div class="header">
-        <h2 id="display-title">Market Analysis</h2>
-        <div class="search-area">
-            <input type="text" id="stock-search" list="stock-options" placeholder="Stock Code (e.g. 00001)">
-            <datalist id="stock-options"></datalist>
-            <button id="generate-btn">Generate</button>
-        </div>
-    </div>
-
-    <span class="tag">Price Movement</span>
-    <div class="chart-wrapper"><canvas id="priceChart"></canvas></div>
-
-    <span class="tag">Broker Holdings %</span>
-    <div class="chart-wrapper"><canvas id="ccassChart"></canvas></div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
-
-<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.js"></script>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
-
-<script>
-let stocksIndex = {};
-
-// Load Index
-fetch('stocks_index.json').then(r => r.json()).then(data => {
-    stocksIndex = data;
-    const dl = document.getElementById('stock-options');
-    Object.keys(data).sort().forEach(code => {
-        const opt = document.createElement('option');
-        opt.value = code;
-        opt.label = data[code].name;
-        dl.appendChild(opt);
-    });
-});
-
-document.getElementById('generate-btn').addEventListener('click', async () => {
-    let code = document.getElementById('stock-search').value.trim();
-    if (code.length < 5 && !isNaN(code)) code = code.padStart(5, '0');
-    
-    if (stocksIndex[code]) {
-        await renderDashboard(code);
-    }
-});
-
 async function renderDashboard(code) {
-    // Force cleanup
+    // 1. Force cleanup of existing instances
     ['priceChart', 'ccassChart'].forEach(id => {
         const chart = Chart.getChart(id);
         if (chart) chart.destroy();
@@ -82,59 +12,78 @@ async function renderDashboard(code) {
         fetchCSV(`ccass_pivoted/${code}.csv`)
     ]);
 
-    if (priceData) {
-        const ohlc = priceData.map(d => ({
-            x: luxon.DateTime.fromISO(d.date || d.Date).valueOf(),
-            o: d.open || d.Open, h: d.high || d.High, l: d.low || d.Low, c: d.close || d.Close
-        })).filter(d => d.x && !isNaN(d.c));
-
-        new Chart('priceChart', {
-            type: 'candlestick',
-            data: { datasets: [{ label: 'Price', data: ohlc, color: { up: '#10b981', down: '#ef4444' } }] },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                scales: { x: { type: 'time', time: { unit: 'day' } }, y: { position: 'right' } },
-                plugins: { legend: { display: false } }
-            }
-        });
+    if (!priceData || !ccassData) {
+        console.error("Missing data for alignment");
+        return;
     }
 
-    if (ccassData) {
-        const brokers = Object.keys(ccassData[0]).filter(k => k !== 'date');
-        const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#64748b', '#06b6d4', '#f97316', '#1e40af'];
+    // 2. Map and Sort Data
+    const ohlc = priceData.map(d => ({
+        x: luxon.DateTime.fromISO(d.date || d.Date).valueOf(),
+        o: d.open || d.Open, h: d.high || d.High, l: d.low || d.Low, c: d.close || d.Close
+    })).filter(d => d.x && !isNaN(d.c)).sort((a, b) => a.x - b.x);
 
-        const datasets = brokers.map((b, i) => ({
-            label: `${b} (${(ccassData[ccassData.length-1][b] || 0).toFixed(2)}%)`,
-            data: ccassData.map(d => ({ x: luxon.DateTime.fromISO(d.date).valueOf(), y: d[b] })),
-            backgroundColor: colors[i % colors.length] + 'aa',
-            borderColor: colors[i % colors.length],
-            fill: true, pointRadius: 0, borderWidth: 1
-        }));
+    const brokers = Object.keys(ccassData[0]).filter(k => k !== 'date');
+    const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#64748b', '#06b6d4', '#f97316', '#1e40af'];
 
-        new Chart('ccassChart', {
-            type: 'line',
-            data: { datasets },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                scales: { 
-                    x: { type: 'time', time: { unit: 'day' } },
-                    y: { stacked: true, ticks: { callback: v => v + '%' } }
-                },
-                plugins: { 
-                    legend: { position: 'bottom', labels: { boxWidth: 8, font: { size: 10 } } },
-                    tooltip: { mode: 'index', intersect: false }
-                }
+    const ccassMapped = ccassData.map(d => ({
+        date: luxon.DateTime.fromISO(d.date).valueOf(),
+        values: d
+    })).filter(d => d.date).sort((a, b) => a.date - b.date);
+
+    // 3. FIND COMMON DATE RANGE (CRITICAL FOR ALIGNMENT)
+    const minDate = Math.max(ohlc[0].x, ccassMapped[0].date);
+    const maxDate = Math.min(ohlc[ohlc.length - 1].x, ccassMapped[ccassMapped.length - 1].date);
+
+    // 4. Shared X-Axis Config
+    const sharedXAxis = {
+        type: 'time',
+        time: { unit: 'day' },
+        min: minDate,
+        max: maxDate,
+        grid: { display: false }
+    };
+
+    // 5. Render Price Chart
+    new Chart('priceChart', {
+        type: 'candlestick',
+        data: { 
+            datasets: [{ 
+                label: 'Price', 
+                data: ohlc, 
+                color: { up: '#10b981', down: '#ef4444' },
+                borderColor: { up: '#10b981', down: '#ef4444' }
+            }] 
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: { x: sharedXAxis, y: { position: 'right' } },
+            plugins: { legend: { display: false } }
+        }
+    });
+
+    // 6. Render CCASS Chart
+    const datasets = brokers.map((b, i) => ({
+        label: `${b} (${(ccassData[ccassData.length-1][b] || 0).toFixed(2)}%)`,
+        data: ccassMapped.map(d => ({ x: d.date, y: d.values[b] })),
+        backgroundColor: colors[i % colors.length] + 'aa',
+        borderColor: colors[i % colors.length],
+        fill: true, pointRadius: 0, borderWidth: 1
+    }));
+
+    new Chart('ccassChart', {
+        type: 'line',
+        data: { datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: { 
+                x: sharedXAxis, // Use the exact same axis config
+                y: { stacked: true, beginAtZero: true, ticks: { callback: v => v + '%' } }
+            },
+            plugins: { 
+                legend: { position: 'bottom', labels: { boxWidth: 8, font: { size: 10 } } },
+                tooltip: { mode: 'index', intersect: false }
             }
-        });
-    }
-}
-
-function fetchCSV(url) {
-    return new Promise(resolve => {
-        Papa.parse(url, { download: true, header: true, dynamicTyping: true, skipEmptyLines: true, 
-            complete: r => resolve(r.data), error: () => resolve(null) });
+        }
     });
 }
-</script>
-</body>
-</html>
