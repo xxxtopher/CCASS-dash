@@ -148,11 +148,12 @@ async function renderDashboard(code) {
     });
 
     // 6. Render CCASS Chart
-    const brokers = Object.keys(ccassData[0]).filter(k => k !== 'date');
+    // Filter out 'date' and the tracking column from the layers
+    const brokers = Object.keys(ccassData[0]).filter(k => k !== 'date' && k !== 'TOTAL_CCASS_PCT');
     const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#64748b', '#06b6d4', '#f97316', '#1e40af'];
 
     const datasets = brokers.map((b, i) => ({
-        label: `${b} (${(ccassData[ccassData.length-1][b] || 0).toFixed(2)}%)`,
+        label: b,
         data: ccassMapped.map(d => ({ x: d.date, y: d.values[b] })),
         backgroundColor: colors[i % colors.length] + 'aa',
         borderColor: colors[i % colors.length],
@@ -170,11 +171,24 @@ async function renderDashboard(code) {
             },
             plugins: { 
                 legend: { position: 'bottom', labels: { boxWidth: 8, font: { size: 10 } } },
-                tooltip: { mode: 'index', intersect: false }
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        // This adds the "TOTAL IN CCASS" header to the tooltip
+                        beforeTitle: function(context) {
+                            const index = context[0].dataIndex;
+                            const total = ccassData[index].TOTAL_CCASS_PCT;
+                            return `TOTAL IN CCASS: ${total.toFixed(2)}%`;
+                        },
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.raw.y.toFixed(2)}%`;
+                        }
+                    }
+                }
             }
         }
     });
-}
 
 function fetchCSV(url) {
     return new Promise(resolve => {
