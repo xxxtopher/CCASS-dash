@@ -85,33 +85,40 @@
         }
     });
 
-    // 3. Main Rendering Function
+    // 3. Main Rendering Function (Synced Version)
     async function renderDashboard(code) {
         const priceData = await fetchCSV('price_data/' + code + '.csv');
         const ccassData = await fetchCSV('ccass_pivoted/' + code + '.csv');
 
         if (!priceData || !ccassData || ccassData.length === 0) {
-            alert("Data not found for " + code + ". Ensure CSVs exist in price_data/ and ccass_pivoted/");
+            alert("Data not found for " + code);
             return;
         }
 
-        // Cleanup: Destroy previous charts to avoid "Canvas in use" errors
+        // 1. CALCULATE SHARED DATE RANGE
+        const priceDates = priceData.map(d => luxon.DateTime.fromISO(d.date).valueOf());
+        const ccassDates = ccassData.map(d => luxon.DateTime.fromISO(d.date).valueOf());
+        const minDate = Math.min(...priceDates, ...ccassDates);
+        const maxDate = Math.max(...priceDates, ...ccassDates);
+
         if (priceChartInstance) priceChartInstance.destroy();
         if (ccassChartInstance) ccassChartInstance.destroy();
 
         const getXAxis = () => ({
             type: 'time',
             time: { unit: 'day' },
-            grid: { display: false },
-            ticks: { source: 'data' }
+            min: minDate,
+            max: maxDate,
+            grid: { display: true, color: '#f1f5f9' },
+            ticks: { source: 'auto' }
         });
 
-        // 4. Render Price Chart (Candlestick)
+        // 4. Render Price Chart
         priceChartInstance = new Chart('priceChart', {
             type: 'candlestick',
             data: {
                 datasets: [{
-                    label: code + ' Price',
+                    label: 'Price',
                     data: priceData.map(d => ({
                         x: luxon.DateTime.fromISO(d.date).valueOf(),
                         o: d.open, h: d.high, l: d.low, c: d.close
@@ -121,50 +128,53 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                scales: { x: getXAxis(), y: { beginAtZero: false } }
+                onHover: (e) => syncCharts(e, ccassChartInstance),
+                scales: { 
+                    x: getXAxis(), 
+                    y: { position: 'right', afterFit: (axis) => { axis.width = 70 } } 
+                },
+                plugins: { tooltip: { mode: 'index', intersect: false } }
             }
         });
 
-        // 5. Render CCASS Chart (Stacked Area)
+        // 5. Render CCASS Chart
         const brokers = Object.keys(ccassData[0]).filter(k => k !== 'date' && k !== 'TOTAL_CCASS_PCT');
         const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#64748b', '#06b6d4', '#f97316', '#1e40af'];
 
-        const datasets = brokers.map((b, i) => ({
-            label: b,
-            data: ccassData.map(d => ({
-                x: luxon.DateTime.fromISO(d.date).valueOf(),
-                y: d[b]
-            })),
-            backgroundColor: colors[i % colors.length] + 'aa',
-            borderColor: colors[i % colors.length],
-            fill: true,
-            pointRadius: 0,
-            borderWidth: 1
-        }));
-
         ccassChartInstance = new Chart('ccassChart', {
             type: 'line',
-            data: { datasets },
+            data: {
+                datasets: brokers.map((b, i) => ({
+                    label: b,
+                    data: ccassData.map(d => ({
+                        x: luxon.DateTime.fromISO(d.date).valueOf(),
+                        y: d[b]
+                    })),
+                    backgroundColor: colors[i % colors.length] + 'aa',
+                    borderColor: colors[i % colors.length],
+                    fill: true, pointRadius: 0, borderWidth: 1
+                }))
+            },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                onHover: (e) => syncCharts(e, priceChartInstance),
                 scales: { 
                     x: getXAxis(), 
-                    y: { stacked: true, beginAtZero: true, ticks: { callback: v => v + '%' } }
+                    y: { 
+                        stacked: true, position: 'right',
+                        afterFit: (axis) => { axis.width = 70 },
+                        ticks: { callback: v => v + '%' } 
+                    } 
                 },
-                plugins: { 
+                plugins: {
                     legend: { position: 'bottom', labels: { boxWidth: 8, font: { size: 10 } } },
                     tooltip: {
-                        mode: 'index',
-                        intersect: false,
+                        mode: 'index', intersect: false,
                         callbacks: {
                             beforeTitle: function(context) {
-                                const index = context[0].dataIndex;
-                                const total = ccassData[index].TOTAL_CCASS_PCT;
-                                return total ? "TOTAL IN CCASS: " + total.toFixed(2) + "%" : "";
-                            },
-                            label: function(context) {
-                                return context.dataset.label + ": " + context.raw.y.toFixed(2) + "%";
+                                const total = ccassData[context[0].dataIndex].TOTAL_CCASS_PCT;
+                                return total ? `TOTAL CCASS: ${total.toFixed(2)}%` : "";
                             }
                         }
                     }
@@ -173,18 +183,18 @@
         });
     }
 
-    // Helper: Fetch CSV
-    function fetchCSV(url) {
-        return new Promise(resolve => {
-            Papa.parse(url, {
-                download: true,
-                header: true,
-                dynamicTyping: true,
-                skipEmptyLines: true,
-                complete: r => resolve(r.data),
-                error: () => resolve(null)
-            });
-        });
+    // NEW HELPER: For cross-chart hovering
+    function syncCharts(mouseEvent, targetChart) {
+        if (!targetChart || !mouseEvent.native) return;
+        const points = targetChart.getElementsAtEventForMode(mouseEvent.native, 'index', { intersect: false }, true);
+        if (points.length > 0) {
+            targetChart.setActiveElements(points);
+            targetChart.tooltip.setActiveElements(points);
+        } else {
+            targetChart.setActiveElements([]);
+            targetChart.tooltip.setActiveElements([]);
+        }
+        targetChart.update('none');
     }
 
     // Helper: Fetch JSON
