@@ -116,7 +116,11 @@
                     label: 'Price',
                     data: priceData.map(d => ({
                         x: luxon.DateTime.fromISO(d.date).valueOf(),
-                        o: d.open, h: d.high, l: d.low, c: d.close
+                        // Round raw data to 2 decimals for consistency
+                        o: Number(d.open.toFixed(2)), 
+                        h: Number(d.high.toFixed(2)), 
+                        l: Number(d.low.toFixed(2)), 
+                        c: Number(d.close.toFixed(2))
                     }))
                 }]
             },
@@ -126,9 +130,33 @@
                 onHover: (e) => syncCharts(e, ccassChartInstance),
                 scales: { 
                     x: getXAxis(), 
-                    y: { position: 'right', afterFit: (axis) => { axis.width = 70 } } 
+                    y: { 
+                        position: 'right', 
+                        afterFit: (axis) => { axis.width = 70 },
+                        ticks: {
+                            // Forces the Y-axis labels to 2 decimal places
+                            callback: (value) => value.toFixed(2)
+                        }
+                    } 
                 },
-                plugins: { tooltip: { mode: 'index', intersect: false } }
+                plugins: { 
+                    tooltip: { 
+                        mode: 'index', 
+                        intersect: false,
+                        callbacks: {
+                            // Custom tooltip label to format OHLC values
+                            label: function(context) {
+                                const p = context.raw;
+                                return [
+                                    `Open:  ${p.o.toFixed(2)}`,
+                                    `High:  ${p.h.toFixed(2)}`,
+                                    `Low:   ${p.l.toFixed(2)}`,
+                                    `Close: ${p.c.toFixed(2)}`
+                                ];
+                            }
+                        }
+                    } 
+                }
             }
         });
 
